@@ -1,0 +1,21 @@
+# Sessions — large, ephemeral, private
+agent/sessions/
+
+# Auth tokens and secrets
+agent/auth.json
+
+# Binaries
+agent/bin/
+
+# npm packages (regenerable)
+agent/npm/node_modules/
+
+# Cloned repos (regenerable)
+agent/git/
+
+# Context mode cache (426MB+)
+context-mode/
+
+# Ephemeral state
+web-search.json
+exa-usage.json
