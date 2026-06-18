@@ -1,0 +1,8 @@
+{
+  "name": "pi-subagents-custom",
+  "private": true,
+  "description": "Custom fork of pi-subagents-lite with bug fixes",
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.49"
+  }
+}

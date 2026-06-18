@@ -1,9 +1,5 @@
 # AGENTS.md
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
-
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
-
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
@@ -59,6 +55,41 @@ For multi-step tasks, state a brief plan:
 ```
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+## 5. Use the Agent Pipeline for Complex Tasks
+
+**For non-trivial, multi-file, or architectural work, delegate to agents instead of doing everything yourself.**
+
+Available agents (spawn via `Agent` tool):
+
+| Agent | Purpose | Model | Thinking |
+|-------|----------|-------|----------|
+| **manager** | Orchestrate: dispatch scout/researcher, produce execution plan, then spawn executor + reviewer | qwen3.7-max | high |
+| **scout** | Read-only codebase recon — map structure, find relevant files, identify patterns | deepseek-v4-flash | off |
+| **researcher** | Web/docs research with source citations | deepseek-v4-flash | off |
+| **executor** | Implement from a manager plan — multi-file edits, follow existing patterns | glm-5.1 | medium |
+| **executor-deep** | Same as executor but with deep reasoning — for algorithms, complex types, security-sensitive code | kimi-k2.7-code | high |
+| **reviewer** | Audit executor output against plan, quality constraints, and edge cases | deepseek-v4-pro | high |
+
+### When to use agents
+
+- **Single quick edit?** Do it yourself. No agents needed.
+- **Multi-file change or feature addition?** Spawn a **manager** to orchestrate. It will dispatch scout, researcher, executor, and reviewer as needed.
+- **Need codebase context first?** Spawn a **scout** directly.
+- **Need external knowledge?** Spawn a **researcher** directly.
+
+### How
+
+```
+# Full pipeline — manager handles everything
+Agent(prompt="Add user authentication to the project", agent="manager")
+
+# Direct sub-agent for specific needs
+Agent(prompt="Find all files related to payment processing", agent="scout")
+Agent(prompt="Research the latest Stripe API for subscription billing", agent="researcher")
+```
+
+Use `AgentStatus` to check on running agents. Use `StopAgent` to cancel one.
 
 ---
 

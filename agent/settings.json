@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.79.3",
+  "lastChangelogVersion": "0.79.6",
   "enabledModels": [
     "opencode-go/deepseek-v4-flash",
     "opencode-go/deepseek-v4-pro",
@@ -10,17 +10,14 @@
     "opencode-go/qwen3.7-max"
   ],
   "defaultProvider": "opencode-go",
-  "defaultModel": "glm-5.1",
+  "defaultModel": "qwen3.7-max",
   "npmCommand": [
     "pnpm"
   ],
   "packages": [
     "npm:@aliou/pi-guardrails",
     "npm:@ff-labs/pi-fff",
-    "npm:pi-subagents-lite",
-    "npm:pi-web-access",
-    "npm:@victor-software-house/pi-context-optimizer",
     "npm:@juicesharp/rpiv-ask-user-question"
   ],
-  "defaultThinkingLevel": "medium"
+  "defaultThinkingLevel": "high"
 }

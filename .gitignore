@@ -12,10 +12,3 @@ agent/npm/node_modules/
 
 # Cloned repos (regenerable)
 agent/git/
-
-# Context mode cache (426MB+)
-context-mode/
-
-# Ephemeral state
-web-search.json
-exa-usage.json
