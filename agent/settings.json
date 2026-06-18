@@ -15,7 +15,6 @@
     "pnpm"
   ],
   "packages": [
-    "npm:@aliou/pi-guardrails",
     "npm:@ff-labs/pi-fff",
     "npm:@juicesharp/rpiv-ask-user-question"
   ],
