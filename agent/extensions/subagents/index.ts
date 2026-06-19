@@ -57,7 +57,7 @@ interface ToolEvent {
 
 interface AgentProgress {
 	agent: string;
-	status: "pending" | "running" | "completed" | "failed";
+	status: "pending" | "running" | "completed" | "failed" | "escalated";
 	task: string;
 	/**
 	 * Chronological log of tool calls — running and done interleaved. The
@@ -80,6 +80,12 @@ interface AgentResult {
 	model?: string;
 	contextWindow?: number;
 	usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number };
+	/**
+	 * Set when the child called the `escalate` tool to suspend its run and bubble
+	 * a question up to the parent (manager). The parent surfaces this as the
+	 * subagent's result so the manager can answer and re-dispatch the worker.
+	 */
+	escalation?: { question: string; context?: string };
 }
 
 interface Details {
@@ -124,6 +130,11 @@ const CUSTOM_TOOL_EXTENSIONS: Record<string, string> = {
 	// same index.ts via `--extension`, sees its own subagent tool, and (if
 	// PI_SUBAGENT_ALLOWED is set) only registers the allowlisted agents.
 	subagent: path.join(EXT_DIR, "index.ts"),
+	// `escalate` is registered by this same extension, but only inside child
+	// subagent processes (guarded by PI_SUBAGENT_CHILD in the default export).
+	// Listing it here lets a child agent that declares `escalate` in its `tools`
+	// get the tool exposed via pi's --tools allowlist.
+	escalate: path.join(EXT_DIR, "index.ts"),
 };
 
 // ── Agent Discovery & Registration ────────────────────────────────────
@@ -345,14 +356,12 @@ async function buildPiArgs(
 		args.push(`Task: ${task}`);
 	}
 
-	// If this agent is allowed to spawn subagents AND we want to restrict which
-	// ones, pass the allowlist down via env. The child pi process loads this
-	// extension and filters its agent registry before exposing tool descriptions
-	// to the LLM — so the child literally cannot request an agent outside the
-	// allowlist (the name isn't in its prompt).
-	let childEnv: NodeJS.ProcessEnv | undefined;
+	// Mark every child as a subagent process. The extension uses this to expose
+	// the `escalate` tool only inside children, never at the top-level session
+	// (which is the manager — it has no parent to escalate to).
+	let childEnv: NodeJS.ProcessEnv = { ...process.env, PI_SUBAGENT_CHILD: "1" };
 	if (agent.tools.includes("subagent") && agent.subagentAgents && agent.subagentAgents.length > 0) {
-		childEnv = { ...process.env, PI_SUBAGENT_ALLOWED: agent.subagentAgents.join(",") };
+		childEnv.PI_SUBAGENT_ALLOWED = agent.subagentAgents.join(",");
 	}
 
 	return { args: [piBin.command, ...args], tempDir, childEnv };
@@ -463,6 +472,13 @@ async function runSubagent(
 						toolCallId: evt.toolCallId,
 						status: "running",
 					});
+					// Capture an `escalate` call so the parent can surface the question as
+					// the subagent's result. The child's `escalate` tool just returns a
+					// "stop" message; the question itself rides up via this event's args.
+					if (evt.toolName === "escalate" && evt.args) {
+						const ea = evt.args as { question?: string; context?: string };
+						result.escalation = { question: ea.question || "", context: ea.context };
+					}
 					fireUpdate();
 				}
 
@@ -596,6 +612,15 @@ async function runSubagent(
 	progress.durationMs = Date.now() - startTime;
 	if (progress.error) result.output = result.output || `Error: ${progress.error}`;
 
+	// If the child escalated (called the `escalate` tool), surface the question
+	// as the result regardless of exit code. The manager reads this and
+	// re-dispatches the worker with an answer (or asks the user).
+	if (result.escalation) {
+		progress.status = "escalated";
+		const ctx = result.escalation.context?.trim();
+		result.output = `## ⏏ Escalation from ${agent.name}\n\n**Question:** ${result.escalation.question.trim() || "(unspecified)"}\n\n**Context:** ${ctx ? ctx : "(none provided)"}\n\n_This subagent has suspended and is awaiting a decision. Review the question, then either answer it yourself and re-dispatch the worker with the answer appended to its task, or ask the user._`;
+	}
+
 	// Truncate output if very large
 	if (result.output.length > DEFAULT_MAX_BYTES) {
 		const trunc = truncateHead(result.output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
@@ -701,13 +726,16 @@ function renderAgentProgress(
 	};
 
 	// Header: icon + agent + stats (always one line)
+	const isEscalated = prog.status === "escalated";
 	const icon = isRunning
 		? theme.fg("warning", "⟳")
 		: isPending
 			? theme.fg("dim", "○")
-			: r.exitCode === 0
-				? theme.fg("success", "✓")
-				: theme.fg("error", "✗");
+			: isEscalated
+				? theme.fg("accent", "⏏")
+				: r.exitCode === 0
+					? theme.fg("success", "✓")
+					: theme.fg("error", "✗");
 	const stats = `${prog.toolCount} tools · ${formatDuration(prog.durationMs)}`;
 	const modelStr = r.model ? theme.fg("dim", ` (${r.model})`) : "";
 	addLine(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${modelStr} — ${theme.fg("dim", stats)}`);
@@ -800,6 +828,12 @@ export default function (pi: ExtensionAPI) {
 	const config = loadConfig();
 	const semaphore = new Semaphore(config.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY);
 	agents = loadAgents();
+
+	// True when this process was spawned by a parent subagent (the parent sets
+	// PI_SUBAGENT_CHILD=1 on every child). We expose the `escalate` tool only
+	// inside children — the top-level session is the manager, which has no
+	// parent to escalate to and must not see the tool.
+	const IS_CHILD = !!process.env.PI_SUBAGENT_CHILD;
 
 	// If spawned as a child by a parent subagent process, PI_SUBAGENT_ALLOWED
 	// pins which agents we're allowed to expose. Filter the registry now, before
@@ -930,4 +964,40 @@ export default function (pi: ExtensionAPI) {
 			return c;
 		},
 	});
+
+	// `escalate` — let a child subagent suspend its run and bubble a question up
+	// to the parent (manager). The tool itself only returns a "stop" instruction;
+	// the question is captured by the parent's `processLine` from this call's
+	// `tool_execution_start` event args and surfaced as the subagent's result.
+	// Registered only inside child processes (see IS_CHILD above).
+	if (IS_CHILD) {
+		pi.registerTool({
+			name: "escalate",
+			label: "Escalate",
+			description:
+				"Ask the parent (manager) a question when you're blocked on a decision you can't make yourself. Your run stops immediately after this call — the manager receives your question and re-dispatches you with an answer. Use sparingly: only for genuine ambiguity, missing context you can't obtain via read/grep/scout/researcher, or decisions outside your authority. Do NOT use it to report completion or for anything you can resolve yourself.",
+			promptSnippet: "Escalate to the manager when blocked",
+			promptGuidelines: [
+				"Call `escalate` only when you genuinely cannot proceed without a decision or information you cannot obtain yourself.",
+				"Include enough context that the manager can answer without re-reading your work: what you tried, what you found, the options, and your recommendation.",
+				"After calling `escalate`, stop. Do not call more tools or attempt to proceed — end your turn.",
+			],
+			parameters: Type.Object({
+				question: Type.String({ description: "The specific question for the manager." }),
+				context: Type.Optional(Type.String({ description: "Background the manager needs: what you tried, what you found, the options, and your recommendation if any." })),
+			}),
+			async execute(_toolCallId, params) {
+				const q = (params.question || "").trim();
+				const ctx = (params.context || "").trim();
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Escalation recorded.\n\nQuestion: ${q || "(unspecified)"}${ctx ? `\n\nContext: ${ctx}` : ""}\n\nSTOP now. Do not call any more tools and do not attempt to proceed. End your turn immediately. The manager will receive this question and re-dispatch you with an answer.`,
+						},
+					],
+				};
+			},
+		});
+	}
 }

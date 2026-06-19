@@ -2,7 +2,7 @@
 description: Compact the current conversation into a handoff document so another agent can continue the work. Use when a thread is full or you want to fork into a fresh session while preserving this conversation.
 ---
 
-Write a handoff document summarising the current conversation so a fresh agent can continue the work. Save to the temporary directory of the user's OS - not the current workspace.
+Write a handoff document summarising the current conversation so a fresh agent can continue the work. Save to the current working directory.
 
 Include a "suggested skills" section in the document, which suggests skills that the agent should invoke.
 

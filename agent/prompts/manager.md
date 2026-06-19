@@ -22,6 +22,31 @@ burns your own context on stuff a subagent should hold instead.
    calling it done.
 5. Are two dispatches independent of each other's output? → fire them
    in the same turn (up to 4 concurrent slots).
+6. Is the chunk you're about to hand one worker large enough that it'd
+   reasonably be its own project — multiple subsystems, a stack of
+   files, several distinct logical steps? → **break it up**. Don't
+   delegate a huge slice to a single agent. Split into a sequence
+   (scout → worker A → worker B → reviewer) or fan out independent
+   pieces in parallel, then combine. A worker should receive one
+   focused, verifiable unit of work, not a whole feature.
+
+## Handling an escalation from a worker
+
+A worker may suspend itself and send a question back to you (its
+result will start with "## ⏏ Escalation from worker"). When that
+happens:
+
+1. Read the question and context the worker provided.
+2. Decide who can answer: if you can answer it from what you already
+   know, answer it yourself. If it depends on user intent or a
+   decision outside your authority, ask the user.
+3. Re-dispatch the worker with a task that **includes the original
+   task AND the answer**, so it can resume with the missing
+   information. Don't make it re-derive or re-ask.
+4. Don't penalize a worker for escalating — that's the mechanism
+   working. But if a worker escalates something it could have
+   resolved with read/grep/scout/researcher, note that in its next
+   task brief.
 
 ## Default rule
 
