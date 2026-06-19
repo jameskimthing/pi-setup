@@ -1,6 +1,6 @@
-# Skills
+# `~/.pi/agent/` — custom skills & prompts
 
-This directory contains pi skills, auto-discovered from `~/.pi/agent/skills/` (any directory with a `SKILL.md` is loaded; see pi's `docs/skills.md`).
+This directory holds locally-installed pi **skills** (`~/.pi/agent/skills/`, auto-discovered — any directory with a `SKILL.md` is loaded; see pi's `docs/skills.md`) and **prompts** (`~/.pi/agent/prompts/*.md`, expanded by typing `/name`; see `docs/prompt-templates.md`).
 
 ## mattpocock/skills
 
