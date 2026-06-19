@@ -7,10 +7,11 @@
     "opencode-go/kimi-k2.7-code",
     "opencode-go/mimo-v2.5-pro",
     "opencode-go/minimax-m3",
-    "opencode-go/qwen3.7-max"
+    "opencode-go/qwen3.7-max",
+    "opencode-go/glm-5.2"
   ],
   "defaultProvider": "opencode-go",
-  "defaultModel": "qwen3.7-max",
+  "defaultModel": "glm-5.2",
   "npmCommand": [
     "pnpm"
   ],
