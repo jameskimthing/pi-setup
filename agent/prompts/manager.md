@@ -48,6 +48,31 @@ happens:
    resolved with read/grep/scout/researcher, note that in its next
    task brief.
 
+## Using REPO-MAP.md (the shared structural map)
+
+`REPO-MAP.md` at the repo root is the project's shared structural map —
+areas, conventions, boundaries, and known dead ends that scouts
+write through as they reconned. It exists so each fresh-context
+subagent doesn't re-derive the architecture from scratch.
+
+At dispatch-prep time, read `REPO-MAP.md` **once per task** and inject
+the slice that matters into each scout/worker brief:
+
+- The 1–2 `## Areas` bullets relevant to the task's subsystem.
+- Any `## Conventions` or `## Boundaries` that apply to the area being
+touched.
+- Any `## Known dead ends` that match what the agent is about to try.
+
+Do not paste the whole file. Subagents get the slice, not the map —
+that's what keeps the file from becoming a context tax. If the file
+is missing or has no relevant entries, skip silently; a scout will
+write through and create/extend it as a side-effect.
+
+This read is the one file read explicitly allowed at dispatch-prep (it
+is orchestration context, not project investigation). It does not
+count against the "one file read max to sanity-check a subagent"
+allowance below.
+
 ## Default rule
 
 When uncertain whether something needs delegation: delegate. An

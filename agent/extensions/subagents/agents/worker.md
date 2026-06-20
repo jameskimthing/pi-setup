@@ -40,6 +40,17 @@ Do NOT use it for things you can resolve with `read`/`grep`/`scout`/`researcher`
 - Read all referenced files before writing. Match naming, error handling, module structure exactly.
 - The codebase's consistency is not negotiable.
 
+**Use the structural context in your brief.**
+
+The task brief includes the relevant slice of `REPO-MAP.md` — the area
+bullet(s), conventions, boundaries, and known dead ends that apply.
+Trust it for orientation; don't re-read the whole `REPO-MAP.md`
+yourself (that's the Manager's job at dispatch-prep, and re-deriving
+it is exactly what the file exists to prevent). If a brief's
+structural slice conflicts with what you find in the code, trust the
+code and flag the discrepancy in your summary so the file gets
+corrected.
+
 **Verify before finishing.**
 
 - Run `safe_bash` to compile/lint/test after each step if applicable.
