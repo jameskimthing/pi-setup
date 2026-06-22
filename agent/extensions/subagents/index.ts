@@ -30,6 +30,15 @@ export interface AgentConfig {
 	 * `undefined` means no restriction (child sees every registered agent).
 	 */
 	subagentAgents?: string[];
+	/**
+	 * Manager-grade agent: leave skills, extension, and package discovery ON and
+	 * allow every tool (no `--no-skills`, `--no-extensions`, or `--tools`
+	 * allowlist). Matches what the top-level manager session has — all skills,
+	 * all extensions (subagents/firecrawl/exa/...), and all package tools
+	 * (ffgrep/fffind/ask_user_question). The agent's `tools` list is then only
+	 * used for the `subagent`/`escalate` env wiring, not for tool filtering.
+	 */
+	fullPower?: boolean;
 }
 
 interface ToolEvent {
@@ -124,6 +133,7 @@ const CUSTOM_TOOL_EXTENSIONS: Record<string, string> = {
 	firecrawl_map: path.join(EXT_BASE, "firecrawl", "index.ts"),
 	firecrawl_search: path.join(EXT_BASE, "firecrawl", "index.ts"),
 	firecrawl_extract: path.join(EXT_BASE, "firecrawl", "index.ts"),
+	exa_search: path.join(EXT_BASE, "exa", "index.ts"),
 	safe_bash: path.join(TOOLS_DIR, "safe-bash.ts"),
 	// `subagent` is the tool this very extension registers. Listing it here lets
 	// a parent agent grant it to a child agent — the child pi process loads this
@@ -184,6 +194,7 @@ function loadAgents(): AgentConfig[] {
 		const subagentAgents = rawSubagentAgents
 			? rawSubagentAgents.split(",").map((t) => t.trim()).filter(Boolean)
 			: undefined;
+		const fullPower = /^(true|1|yes|on)$/i.test((frontmatter as Record<string, string>).full_power || "");
 		agents.push({
 			name: frontmatter.name,
 			description: frontmatter.description || "",
@@ -193,6 +204,7 @@ function loadAgents(): AgentConfig[] {
 			systemPrompt: body,
 			filePath,
 			subagentAgents,
+			fullPower,
 		});
 	}
 	return agents;
@@ -251,6 +263,7 @@ function formatToolPreview(name: string, args: Record<string, unknown>): string 
 		case "ls":
 			return `ls ${(args.path as string) || "."}`;
 		case "firecrawl_search":
+		case "exa_search":
 			return `search "${(args.query as string) || ""}"`;
 		case "firecrawl_scrape":
 		case "firecrawl_crawl":
@@ -309,35 +322,45 @@ async function buildPiArgs(
 		await fs.promises.writeFile(promptPath, agent.systemPrompt, { encoding: "utf-8", mode: 0o600 });
 	});
 
-	const args = [...piBin.baseArgs, "--mode", "json", "-p", "--no-session", "--no-skills"];
+	const args = [...piBin.baseArgs, "--mode", "json", "-p", "--no-session"];
 
-	// Separate builtin tools from custom tools. Both kinds share the same
-	// --tools allowlist in pi; --no-tools would disable extension tools too.
-	const allowlist: string[] = [];
-	const extensionPaths = new Set<string>();
-
-	for (const tool of agent.tools) {
-		if (BUILTIN_TOOLS.has(tool)) {
-			allowlist.push(tool);
-		} else if (CUSTOM_TOOL_EXTENSIONS[tool]) {
-			allowlist.push(tool);
-			extensionPaths.add(CUSTOM_TOOL_EXTENSIONS[tool]);
-		}
-	}
-
-	// Use --no-extensions then add only what we need
-	args.push("--no-extensions");
-
-	if (allowlist.length > 0) {
-		// --tools is a unified allowlist that applies to built-in, extension, and custom tools.
-		args.push("--tools", allowlist.join(","));
+	if (agent.fullPower) {
+		// Manager-grade: keep skills, extension, and package discovery ON and
+		// allow every tool. Auto-discovery loads the subagents extension
+		// (→ subagent + escalate), firecrawl, exa, and the fff/ask-user-question
+		// packages, exactly like the top-level manager session. No --tools
+		// allowlist, no --no-extensions, no --no-skills.
 	} else {
-		// Agent declared no tools — disable everything.
-		args.push("--no-tools");
-	}
+		args.push("--no-skills");
 
-	for (const extPath of extensionPaths) {
-		args.push("--extension", extPath);
+		// Separate builtin tools from custom tools. Both kinds share the same
+		// --tools allowlist in pi; --no-tools would disable extension tools too.
+		const allowlist: string[] = [];
+		const extensionPaths = new Set<string>();
+
+		for (const tool of agent.tools) {
+			if (BUILTIN_TOOLS.has(tool)) {
+				allowlist.push(tool);
+			} else if (CUSTOM_TOOL_EXTENSIONS[tool]) {
+				allowlist.push(tool);
+				extensionPaths.add(CUSTOM_TOOL_EXTENSIONS[tool]);
+			}
+		}
+
+		// Use --no-extensions then add only what we need
+		args.push("--no-extensions");
+
+		if (allowlist.length > 0) {
+			// --tools is a unified allowlist that applies to built-in, extension, and custom tools.
+			args.push("--tools", allowlist.join(","));
+		} else {
+			// Agent declared no tools — disable everything.
+			args.push("--no-tools");
+		}
+
+		for (const extPath of extensionPaths) {
+			args.push("--extension", extPath);
+		}
 	}
 
 	args.push("--models", agent.model);

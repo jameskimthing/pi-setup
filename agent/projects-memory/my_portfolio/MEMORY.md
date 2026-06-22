@@ -1,0 +1,3 @@
+my_portfolio: Astro 6.4.8 + Svelte 5.56.3 + Tailwind v4. Dev: `pnpm dev`. Build/check pass. Header section uses InteractiveText.svelte with `@attach` cycleFont, `in:reveal` transition, `display:contents` wrapper, nested {#each} over chars. Hydration runs via `client:load` on PortfolioHeader.svelte in src/pages/index.astro. <!-- created=2026-06-21, last=2026-06-21 -->
+§
+my_portfolio: Convention — maintain ISSUES.md at repo root to record fixed issues/bugs (root cause, fix) so mistakes aren't repeated. User chose version-controlled markdown over agent-only memory for this (visible to collaborators, survives sessions). Add entry on each non-trivial bug fix. <!-- created=2026-06-21, last=2026-06-21 -->

@@ -1,17 +1,27 @@
 /**
- * OpenCode Go Usage Extension for Pi
+ * API Usage Extension for Pi
  *
- * Adds /usage command to show your OpenCode Go subscription quota.
+ * Adds /usage command showing usage + limits for:
+ * - OpenCode Go subscription (rolling/weekly/monthly %)
+ * - Firecrawl (remaining credits / plan credits, billing period)
+ * - Exa (cost in USD over last 30 days, per-key breakdown)
  *
- * Strategy (in order):
+ * OpenCode Go strategy (in order):
  * 1. Try /zen/go/v1/usage API (currently 404, future-proof)
  * 2. If dashboard credentials configured, scrape for exact percentages
  * 3. Fall back to probing cheap models to check availability
  *
- * Dashboard config (for exact %):
+ * OpenCode Go dashboard config (for exact %):
  *   Env: OPENCODE_GO_WORKSPACE_ID + OPENCODE_GO_AUTH_COOKIE
  *   File: ~/.config/opencode/opencode-quota/opencode-go.json
  *         { "workspaceId": "wrk_...", "authCookie": "Fe26.2**..." }
+ *
+ * Firecrawl: uses FIRECRAWL_API_KEY (same key as the firecrawl extension).
+ *
+ * Exa: the admin team-management API requires a *service* API key, which is
+ * separate from the EXA_API_KEY used for search. Set EXA_SERVICE_KEY
+ * (add to ~/.env_keys). Create one at https://dashboard.exa.ai/api-keys.
+ * Exa has no remaining-balance API; usage shows cost in USD over a period.
  */
 
 import * as fs from "node:fs";
@@ -359,70 +369,306 @@ function buildDashboardOutput(result: DashboardResult): string {
   return lines.join("\n");
 }
 
+// ── Firecrawl usage ──
+
+interface FirecrawlUsage {
+  remainingCredits: number;
+  planCredits: number;
+  billingPeriodStart: string | null;
+  billingPeriodEnd: string | null;
+}
+
+async function fetchFirecrawlUsage(): Promise<FirecrawlUsage | null> {
+  const key = process.env.FIRECRAWL_API_KEY?.trim();
+  if (!key) return null;
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(function () { controller.abort(); }, 10000);
+    const res = await fetch("https://api.firecrawl.dev/v2/team/credit-usage", {
+      headers: { Authorization: "Bearer " + key },
+      signal: controller.signal,
+    });
+    clearTimeout(tid);
+    if (!res.ok) return null;
+    const body = (await res.json()) as { data?: Record<string, unknown> };
+    const d = body.data;
+    if (!d) return null;
+    const start = d.billingPeriodStart ?? d.billing_period_start ?? null;
+    const end = d.billingPeriodEnd ?? d.billing_period_end ?? null;
+    return {
+      remainingCredits: Number(d.remainingCredits ?? d.remaining_credits ?? 0),
+      planCredits: Number(d.planCredits ?? d.plan_credits ?? 0),
+      billingPeriodStart: typeof start === "string" ? start : null,
+      billingPeriodEnd: typeof end === "string" ? end : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatIsoDate(s: string | null): string {
+  if (!s) return "—";
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toISOString().slice(0, 10);
+}
+
+function buildFirecrawlSection(u: FirecrawlUsage): string[] {
+  const out: string[] = ["🔥 Firecrawl", "─".repeat(55)];
+  const used = Math.max(0, u.planCredits - u.remainingCredits);
+  const pct = u.planCredits > 0 ? (used / u.planCredits) * 100 : 0;
+  const remainingPct = u.planCredits > 0 ? (u.remainingCredits / u.planCredits) * 100 : 0;
+  const bar = progressBar(pct, 20);
+  out.push(
+    "  " + bar +
+      " " + pct.toFixed(1).padStart(5) + "% used" +
+      "  " + u.remainingCredits + " / " + u.planCredits + " credits left" +
+      " (" + remainingPct.toFixed(1) + "%)",
+  );
+  out.push(
+    "  Billing period: " + formatIsoDate(u.billingPeriodStart) +
+      " → " + formatIsoDate(u.billingPeriodEnd),
+  );
+  return out;
+}
+
+// ── Exa usage ──
+
+interface ExaKeyUsage {
+  id: string;
+  name: string | null;
+  totalCostUsd: number;
+  breakdown: Array<{ priceName: string; quantity: number; amountUsd: number }>;
+  budgetCents: number | null;
+  isOverBudget: boolean;
+  periodStart: string;
+  periodEnd: string;
+  fetchFailed: boolean;
+}
+
+// Exa free tier: 20,000 requests/month free (Search endpoint).
+// Source: https://exa.ai/pricing
+const EXA_FREE_TIER_REQUESTS = 20000;
+
+async function fetchExaUsage(): Promise<{ keys: ExaKeyUsage[]; unauthorized: boolean } | null> {
+  const serviceKey = process.env.EXA_SERVICE_KEY?.trim();
+  if (!serviceKey) return null;
+  const adminBase = "https://admin-api.exa.ai/team-management";
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(function () { controller.abort(); }, 10000);
+    const listRes = await fetch(adminBase + "/api-keys", {
+      headers: { "x-api-key": serviceKey },
+      signal: controller.signal,
+    });
+    clearTimeout(tid);
+    if (listRes.status === 401 || listRes.status === 403) {
+      return { keys: [], unauthorized: true };
+    }
+    if (!listRes.ok) return null;
+    const listBody = (await listRes.json()) as {
+      apiKeys?: Array<{
+        id: string;
+        name?: string | null;
+        budgetCents?: number | null;
+        isOverBudget?: boolean;
+      }>;
+    };
+    const keys = Array.isArray(listBody.apiKeys) ? listBody.apiKeys : [];
+    if (keys.length === 0) return { keys: [], unauthorized: false };
+
+    const results: ExaKeyUsage[] = [];
+    for (const k of keys) {
+      const base: ExaKeyUsage = {
+        id: k.id,
+        name: k.name ?? null,
+        totalCostUsd: 0,
+        breakdown: [],
+        budgetCents: k.budgetCents ?? null,
+        isOverBudget: k.isOverBudget ?? false,
+        periodStart: "",
+        periodEnd: "",
+        fetchFailed: false,
+      };
+      try {
+        const c2 = new AbortController();
+        const t2 = setTimeout(function () { c2.abort(); }, 10000);
+        const uRes = await fetch(
+          adminBase + "/api-keys/" + encodeURIComponent(k.id) + "/usage",
+          { headers: { "x-api-key": serviceKey }, signal: c2.signal },
+        );
+        clearTimeout(t2);
+        if (!uRes.ok) {
+          base.fetchFailed = true;
+          results.push(base);
+          continue;
+        }
+        const u = (await uRes.json()) as {
+          total_cost_usd?: number;
+          cost_breakdown?: Array<{ price_name?: string; quantity?: number; amount_usd?: number }>;
+          period?: { start?: string; end?: string };
+        };
+        base.totalCostUsd = Number(u.total_cost_usd ?? 0);
+        base.breakdown = (Array.isArray(u.cost_breakdown) ? u.cost_breakdown : []).map(function (b) {
+          return {
+            priceName: b.price_name ?? "unknown",
+            quantity: Number(b.quantity ?? 0),
+            amountUsd: Number(b.amount_usd ?? 0),
+          };
+        });
+        base.periodStart = u.period?.start ?? "";
+        base.periodEnd = u.period?.end ?? "";
+        results.push(base);
+      } catch {
+        base.fetchFailed = true;
+        results.push(base);
+      }
+    }
+    return { keys: results, unauthorized: false };
+  } catch {
+    return null;
+  }
+}
+
+function buildExaSection(res: { keys: ExaKeyUsage[]; unauthorized: boolean }): string[] {
+  const out: string[] = ["🔎 Exa", "─".repeat(55)];
+  if (res.unauthorized) {
+    out.push("  ⚠ EXA_SERVICE_KEY rejected (401)");
+    out.push("    Verify the service key at https://dashboard.exa.ai/api-keys");
+    return out;
+  }
+  if (res.keys.length === 0) {
+    out.push("  No API keys found on this team");
+    return out;
+  }
+  const totalAll = res.keys.reduce(function (s, k) { return s + k.totalCostUsd; }, 0);
+  const totalRequests = res.keys.reduce(function (s, k) {
+    return s + k.breakdown.reduce(function (qs, b) { return qs + b.quantity; }, 0);
+  }, 0);
+  const usedPct = Math.min(100, (totalRequests / EXA_FREE_TIER_REQUESTS) * 100);
+  const remaining = Math.max(0, EXA_FREE_TIER_REQUESTS - totalRequests);
+  const remainingPct = Math.max(0, 100 - usedPct);
+  const bar = progressBar(usedPct, 20);
+  out.push("");
+  out.push(
+    "  " + bar +
+      " " + usedPct.toFixed(1).padStart(5) + "% used" +
+      "  " + totalRequests + " / " + EXA_FREE_TIER_REQUESTS + " requests" +
+      " (" + remaining + " left, " + remainingPct.toFixed(1) + "%)",
+  );
+  out.push("  Free tier: 20,000 requests/month (Search)");
+  for (const k of res.keys) {
+    const label = k.name ? "\"" + k.name + "\"" : "(unnamed)";
+    const period = k.periodStart && k.periodEnd
+      ? "  " + formatIsoDate(k.periodStart) + " → " + formatIsoDate(k.periodEnd)
+      : "  (last 30 days)";
+    out.push("  Key " + label + " — $" + k.totalCostUsd.toFixed(2) + " spent" + (k.fetchFailed ? "  ⚠ fetch failed" : ""));
+    out.push(period);
+    for (const b of k.breakdown) {
+      out.push("    " + b.priceName + ": " + b.quantity + " qty — $" + b.amountUsd.toFixed(2));
+    }
+    if (k.budgetCents != null) {
+      out.push("    Budget: $" + (k.budgetCents / 100).toFixed(2) + (k.isOverBudget ? "  ⚠ over budget" : ""));
+    }
+  }
+  if (res.keys.length > 1) {
+    out.push("  Total across keys: $" + totalAll.toFixed(2));
+  }
+  return out;
+}
+
 // ── Extension ──
 
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("usage", {
-    description: "Show OpenCode Go subscription usage",
+    description: "Show API usage + limits (OpenCode Go, Firecrawl, Exa)",
     handler: async function (_args: string, ctx: any) {
+      const sections: string[] = [];
+
+      // ── OpenCode Go ──
+      const goLines: string[] = ["⚡ OpenCode Go", "─".repeat(55)];
       const apiKey = getApiKey();
       const config = resolveConfig();
-
-      const lines: string[] = ["⚡ OpenCode Go Usage", "─".repeat(55)];
       let gotDashboardData = false;
 
-      // Source 1: Usage API (future-proof)
       if (apiKey) {
         const apiResult = await tryUsageApi(apiKey);
         if (apiResult) {
-          lines.push("");
-          lines.push("  (via /zen/go/v1/usage API)");
-          lines.push(buildDashboardOutput(apiResult));
+          goLines.push("");
+          goLines.push("  (via /zen/go/v1/usage API)");
+          goLines.push(buildDashboardOutput(apiResult));
           gotDashboardData = true;
         }
       }
 
-      // Source 2: Dashboard scrape
       if (!gotDashboardData && config) {
         const dashResult = await scrapeDashboard(config);
         if (dashResult) {
-          lines.push("");
-          lines.push("  (via dashboard scrape)");
-          lines.push(buildDashboardOutput(dashResult));
+          goLines.push("");
+          goLines.push("  (via dashboard scrape)");
+          goLines.push(buildDashboardOutput(dashResult));
           gotDashboardData = true;
         } else {
-          lines.push("");
-          lines.push("  ⚠ Dashboard scrape failed — cookie may have expired");
-          lines.push("    Re-copy the auth cookie from your browser devtools");
+          goLines.push("");
+          goLines.push("  ⚠ Dashboard scrape failed — cookie may have expired");
+          goLines.push("    Re-copy the auth cookie from your browser devtools");
         }
       }
 
-      // Source 3: Model probe (always run alongside, or as fallback)
       if (apiKey) {
-        lines.push("");
-        lines.push("  Probing model availability...");
+        goLines.push("");
+        goLines.push("  Probing model availability...");
         const probe = await probeGoAvailability(apiKey);
         if (probe.ok) {
-          lines.push("  ✓ Available (working model: " + probe.model + ")");
+          goLines.push("  ✓ Available (working model: " + probe.model + ")");
         } else {
-          lines.push("  ✗ " + (probe.error ?? "Unavailable"));
+          goLines.push("  ✗ " + (probe.error ?? "Unavailable"));
         }
       }
 
-      // Help tips
       if (!apiKey) {
-        lines.push("");
-        lines.push("  ⚠ No API key found");
-        lines.push("    Set OPENCODE_API_KEY or add to ~/.pi/agent/auth.json");
+        goLines.push("");
+        goLines.push("  ⚠ No API key found");
+        goLines.push("    Set OPENCODE_API_KEY or add to ~/.pi/agent/auth.json");
       }
       if (!config && !gotDashboardData) {
-        lines.push("");
-        lines.push("  For exact %, configure dashboard credentials:");
-        lines.push("    OPENCODE_GO_WORKSPACE_ID + OPENCODE_GO_AUTH_COOKIE env vars");
-        lines.push("    or ~/.config/opencode/opencode-quota/opencode-go.json");
+        goLines.push("");
+        goLines.push("  For exact %, configure dashboard credentials:");
+        goLines.push("    OPENCODE_GO_WORKSPACE_ID + OPENCODE_GO_AUTH_COOKIE env vars");
+        goLines.push("    or ~/.config/opencode/opencode-quota/opencode-go.json");
+      }
+      sections.push(goLines.join("\n"));
+
+      // ── Firecrawl ──
+      const firecrawl = await fetchFirecrawlUsage();
+      if (firecrawl) {
+        sections.push(buildFirecrawlSection(firecrawl).join("\n"));
+      } else if (process.env.FIRECRAWL_API_KEY?.trim()) {
+        sections.push(["🔥 Firecrawl", "─".repeat(55), "  ⚠ Failed to fetch usage"].join("\n"));
+      } else {
+        sections.push([
+          "🔥 Firecrawl", "─".repeat(55),
+          "  ⚠ FIRECRAWL_API_KEY not set",
+          "    Add it to ~/.env_keys",
+        ].join("\n"));
       }
 
-      ctx.ui.notify(lines.join("\n"), "info");
+      // ── Exa ──
+      const exa = await fetchExaUsage();
+      if (exa) {
+        sections.push(buildExaSection(exa).join("\n"));
+      } else if (process.env.EXA_SERVICE_KEY?.trim()) {
+        sections.push(["🔎 Exa", "─".repeat(55), "  ⚠ Failed to fetch usage"].join("\n"));
+      } else {
+        sections.push([
+          "🔎 Exa", "─".repeat(55),
+          "  ⚠ EXA_SERVICE_KEY not set (separate from EXA_API_KEY)",
+          "    Create a service key at https://dashboard.exa.ai/api-keys",
+          "    and add EXA_SERVICE_KEY to ~/.env_keys",
+        ].join("\n"));
+      }
+
+      ctx.ui.notify(sections.join("\n\n"), "info");
     },
   });
 }

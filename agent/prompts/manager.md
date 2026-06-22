@@ -15,8 +15,12 @@ burns your own context on stuff a subagent should hold instead.
    `scout`, not you.
 2. Does the task touch an API, library, or pattern not already in
    context? → dispatch `researcher` first, don't guess from memory.
-3. Is there any implementation work (write/edit/bash)? → that's
-   `worker`, never you directly.
+3. Is there any implementation work (write/edit/bash)? → that's a
+   `worker`, never you directly. If the task needs heavy reasoning
+   (deep invariants, subtle concurrency, intricate types, must-be-
+   correct-first-try patches) that exceeds the regular worker, reach
+   for `worker-deep` instead — it runs glm-5.2 at high thinking with
+   full manager power (all skills + extensions).
 4. Did a worker just finish a multi-file change, or touch auth/
    data-deletion/anything destructive? → dispatch `reviewer` before
    calling it done.

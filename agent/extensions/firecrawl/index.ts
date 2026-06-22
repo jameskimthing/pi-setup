@@ -254,7 +254,11 @@ export default function firecrawlExtension(pi: ExtensionAPI) {
 	});
 
 	// ── firecrawl_map ─────────────────────────────────────────────────────
-
+	// DISABLED 2026-06-22: tool removed from rotation. Re-enable by restoring
+	// the `pi.registerTool({ ... })` block below (see git history for the body).
+	// The MAP_PARAMS schema and the /map API helper are kept above so the only
+	// change needed to re-enable is uncommenting this block.
+	/*
 	pi.registerTool({
 		name: "firecrawl_map",
 		label: "Firecrawl Map",
@@ -295,9 +299,12 @@ export default function firecrawlExtension(pi: ExtensionAPI) {
 			};
 		},
 	});
+	*/
 
 	// ── firecrawl_search ──────────────────────────────────────────────────
-
+	// DISABLED 2026-06-22: tool removed from rotation. Re-enable by restoring
+	// the `pi.registerTool({ ... })` block below (see git history for the body).
+	/*
 	pi.registerTool({
 		name: "firecrawl_search",
 		label: "Firecrawl Search",
@@ -351,9 +358,12 @@ export default function firecrawlExtension(pi: ExtensionAPI) {
 			};
 		},
 	});
+	*/
 
 	// ── firecrawl_extract ──────────────────────────────────────────────────
-
+	// DISABLED 2026-06-22: tool removed from rotation. Re-enable by restoring
+	// the `pi.registerTool({ ... })` block below (see git history for the body).
+	/*
 	pi.registerTool({
 		name: "firecrawl_extract",
 		label: "Firecrawl Extract",
@@ -394,4 +404,5 @@ export default function firecrawlExtension(pi: ExtensionAPI) {
 			};
 		},
 	});
+	*/
 }

@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.79.8",
+  "lastChangelogVersion": "0.79.9",
   "enabledModels": [
     "opencode-go/deepseek-v4-flash",
     "opencode-go/deepseek-v4-pro",
@@ -18,7 +18,8 @@
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:@juicesharp/rpiv-ask-user-question",
-    "npm:pi-caveman"
+    "npm:pi-caveman",
+    "npm:pi-hermes-memory"
   ],
   "defaultThinkingLevel": "high",
   "theme": "dark"
